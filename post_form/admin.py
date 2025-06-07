@@ -1,77 +1,132 @@
-from django.urls import path
-from django.http import HttpResponse, Http404
 from django.contrib import admin
-from django.utils.html import format_html
-from django.core.files.storage import default_storage
-from zipfile import ZipFile
+from .models import FileUpload
+from django.http import HttpResponse
+import zipfile
+import os
+from django.conf import settings
 from io import BytesIO
+import logging
+from django.core.files.storage import default_storage
+import tempfile
+from django.contrib import messages
 
-from .models import WebDesignRequest, WebDesignFile
+logger = logging.getLogger(__name__)
 
+class FileUploadAdmin(admin.ModelAdmin):
+    list_display = ('id', 'created_at', 'has_files')
+    actions = ['download_files_as_zip']
 
-class WebDesignFileInline(admin.TabularInline):
-    model = WebDesignFile
-    extra = 0
-    readonly_fields = ('uploaded_at',)
-    fields = ('file_type', 'file', 'uploaded_at')
+    def has_files(self, obj):
+        return bool(obj.logo or obj.background_image or obj.banner)
+    has_files.boolean = True
+    has_files.short_description = 'Has Files'
 
-@admin.register(WebDesignRequest)
-class WebDesignRequestAdmin(admin.ModelAdmin):
-    list_display = ('client_name', 'created_at', 'updated_at', 'get_file_count', 'download_files_link')
-    list_filter = ('created_at', 'updated_at')
-    search_fields = ('client_name', 'additional_resources')
-    readonly_fields = ('created_at', 'updated_at')
-    inlines = [WebDesignFileInline]
-    
-    def get_file_count(self, obj):
-        return obj.files.count()
-    get_file_count.short_description = 'Archivos'
+    def download_files_as_zip(self, request, queryset):
+        if not queryset.exists():
+            messages.error(request, "No files selected.")
+            return
 
-    def download_files_link(self, obj):
-        if obj.files.exists():
-            return format_html(
-                '<a class="button" href="{}">📦 Descargar ZIP</a>',
-                f'./download/{obj.pk}/'
-            )
-        return "Sin archivos"
-    download_files_link.short_description = "Descargar Archivos"
-
-    def get_urls(self):
-        urls = super().get_urls()
-        custom_urls = [
-            path('download/<int:pk>/', self.admin_site.admin_view(self.download_zip), name="webdesign_download_zip")
-        ]
-        return custom_urls + urls
-
-    def download_zip(self, request, pk):
+        # Create a BytesIO object to store the ZIP file
+        zip_buffer = BytesIO()
+        files_added = 0
+        
         try:
-            obj = WebDesignRequest.objects.get(pk=pk)
-        except WebDesignRequest.DoesNotExist:
-            raise Http404("No se encontró la solicitud")
+            # Create the ZIP file
+            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                for file_upload in queryset:
+                    logger.info(f"Processing upload {file_upload.id}")
+                    
+                    # Add logo if exists
+                    if file_upload.logo:
+                        try:
+                            logger.info(f"Processing logo: {file_upload.logo}")
+                            # Download file from Azure to a temporary file
+                            with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+                                # Download the file
+                                with default_storage.open(str(file_upload.logo), 'rb') as source_file:
+                                    temp_file.write(source_file.read())
+                                temp_file.flush()
+                                
+                                # Add to ZIP
+                                zip_file.write(
+                                    temp_file.name,
+                                    f'logos/{os.path.basename(str(file_upload.logo))}'
+                                )
+                                files_added += 1
+                                logger.info(f"Added logo to ZIP: {file_upload.logo}")
+                            os.unlink(temp_file.name)
+                        except Exception as e:
+                            logger.error(f"Error processing logo: {str(e)}")
+                            messages.error(request, f"Error processing logo: {str(e)}")
+                    
+                    # Add background image if exists
+                    if file_upload.background_image:
+                        try:
+                            logger.info(f"Processing background: {file_upload.background_image}")
+                            with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+                                # Download the file
+                                with default_storage.open(str(file_upload.background_image), 'rb') as source_file:
+                                    temp_file.write(source_file.read())
+                                temp_file.flush()
+                                
+                                # Add to ZIP
+                                zip_file.write(
+                                    temp_file.name,
+                                    f'background_images/{os.path.basename(str(file_upload.background_image))}'
+                                )
+                                files_added += 1
+                                logger.info(f"Added background to ZIP: {file_upload.background_image}")
+                            os.unlink(temp_file.name)
+                        except Exception as e:
+                            logger.error(f"Error processing background: {str(e)}")
+                            messages.error(request, f"Error processing background: {str(e)}")
+                    
+                    # Add banner if exists
+                    if file_upload.banner:
+                        try:
+                            logger.info(f"Processing banner: {file_upload.banner}")
+                            with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+                                # Download the file
+                                with default_storage.open(str(file_upload.banner), 'rb') as source_file:
+                                    temp_file.write(source_file.read())
+                                temp_file.flush()
+                                
+                                # Add to ZIP
+                                zip_file.write(
+                                    temp_file.name,
+                                    f'banners/{os.path.basename(str(file_upload.banner))}'
+                                )
+                                files_added += 1
+                                logger.info(f"Added banner to ZIP: {file_upload.banner}")
+                            os.unlink(temp_file.name)
+                        except Exception as e:
+                            logger.error(f"Error processing banner: {str(e)}")
+                            messages.error(request, f"Error processing banner: {str(e)}")
 
-        buffer = BytesIO()
-        with ZipFile(buffer, "w") as zip_file:
-            for file_obj in obj.files.all():
-                if file_obj.file:
-                    file_name = file_obj.file.name.split('/')[-1]
-                    file_content = default_storage.open(file_obj.file.name).read()
-                    zip_file.writestr(f"{file_obj.file_type}/{file_name}", file_content)
+            # Get the size of the ZIP file
+            zip_size = zip_buffer.tell()
+            logger.info(f"ZIP file size: {zip_size} bytes")
+            logger.info(f"Total files added to ZIP: {files_added}")
 
-        buffer.seek(0)
-        response = HttpResponse(buffer, content_type='application/zip')
-        response['Content-Disposition'] = f'attachment; filename=archivos_{obj.client_name}.zip'
-        return response
+            if zip_size == 0:
+                messages.warning(request, "No files were found to add to the ZIP.")
+                return
 
-@admin.register(WebDesignFile)
-class WebDesignFileAdmin(admin.ModelAdmin):
-    list_display = ('get_client_name', 'file_type', 'file', 'uploaded_at')
-    list_filter = ('file_type', 'uploaded_at')
-    search_fields = ('request__client_name', 'file')
-    readonly_fields = ('uploaded_at',)
+            # Prepare the response
+            zip_buffer.seek(0)
+            response = HttpResponse(zip_buffer.read(), content_type='application/zip')
+            response['Content-Disposition'] = 'attachment; filename=archivos_descargados.zip'
+            response['Content-Length'] = zip_size
+            
+            messages.success(request, f"Successfully added {files_added} files to ZIP.")
+            return response
+
+        except Exception as e:
+            logger.error(f"Error creating ZIP file: {str(e)}")
+            messages.error(request, f"Error creating ZIP file: {str(e)}")
+            return
     
-    def get_client_name(self, obj):
-        return obj.request.client_name
-    get_client_name.short_description = 'Cliente'
-    get_client_name.admin_order_field = 'request__client_name'
+    download_files_as_zip.short_description = "Download selected files as ZIP"
 
+admin.site.register(FileUpload, FileUploadAdmin)
 

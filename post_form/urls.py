@@ -4,5 +4,6 @@ from . import views
 app_name = 'post_form'
 
 urlpatterns = [
-    path('', views.index, name='index'),
-]
+    path('', views.FileUploadView.as_view(), name='file_upload'),
+    path('upload/success/', views.file_upload_success, name='file_upload_success'),
+        ]

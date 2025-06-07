@@ -1,40 +1,22 @@
 from django.shortcuts import render, redirect
 from django.contrib import messages
-from .forms import WebDesignRequestForm, WebDesignFileFormSet
+from .models import FileUpload
+from django.views.generic import CreateView
+from django.urls import reverse_lazy
 
-# Create your views here.
-
-
-def index(request):
-    if request.method == 'POST':
-        form = WebDesignRequestForm(request.POST)
-        if form.is_valid():
-            web_design_request = form.save()
-            formset = WebDesignFileFormSet(request.POST, request.FILES, instance=web_design_request)
-            if formset.is_valid():
-                formset.save()
-                messages.success(request, '¡Tu solicitud de diseño web ha sido enviada con éxito!')
-                return redirect('post_form:index')
-            else:
-                # Mostrar errores específicos del formset
-                for error in formset.non_form_errors():
-                    messages.error(request, f'Error general: {error}')
-                for form in formset:
-                    if form.errors:
-                        for field, errors in form.errors.items():
-                            for error in errors:
-                                messages.error(request, f'Error en {form.instance.file_type if form.instance else "archivo"}: {error}')
-        else:
-            # Mostrar errores específicos del formulario principal
-            for field, errors in form.errors.items():
-                for error in errors:
-                    messages.error(request, f'Error en {field}: {error}')
-    else:
-        form = WebDesignRequestForm()
-        formset = WebDesignFileFormSet()
+class FileUploadView(CreateView):
+    model = FileUpload
+    template_name = 'post_form/files_form.html'
+    success_url = reverse_lazy('post_form:file_upload_success')
+    fields = ['logo', 'background_image', 'banner']
     
-    return render(request, 'post_form/files_form.html', {
-        'form': form,
-        'formset': formset,
-    })
+    def form_valid(self, form):
+        messages.success(self.request, 'Files uploaded successfully!')
+        return super().form_valid(form)
+    
+    def form_invalid(self, form):
+        messages.error(self.request, 'There was an error uploading the files. Please try again.')
+        return super().form_invalid(form)
 
+def file_upload_success(request):
+    return render(request, 'post_form/upload_success.html')
